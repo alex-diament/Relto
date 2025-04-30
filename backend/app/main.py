@@ -1,6 +1,9 @@
 from fastapi import FastAPI
 from fastapi.middleware.cors import CORSMiddleware
+from fastapi.responses import FileResponse
+from fastapi.responses import JSONResponse
 from pydantic import BaseModel
+import os
 
 app = FastAPI()
 
@@ -13,6 +16,16 @@ app.add_middleware(
     allow_headers=["*"],
 )
 
+
+
+@app.get("/parcels")
+def get_parcels():
+    file_path = os.path.abspath(os.path.join(os.path.dirname(__file__), "../../data/palm_beach.geojson"))
+
+    if not os.path.exists(file_path):
+        return JSONResponse(status_code=404, content={"error": "File not found", "path": file_path})
+
+    return FileResponse(file_path, media_type="application/geo+json")
 class AddressInput(BaseModel):
     address: str
 
@@ -24,3 +37,8 @@ async def predict(data: AddressInput):
         "confidence": "92%",
         "address": data.address
     }
+
+@app.get("/parcels")
+def get_parcels():
+    file_path = os.path.abspath(os.path.join(os.path.dirname(__file__), "../../data/palm_beach.geojson"))
+    return FileResponse(file_path, media_type="application/geo+json")

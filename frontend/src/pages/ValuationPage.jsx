@@ -1,10 +1,10 @@
 import { useLocation, useNavigate } from 'react-router-dom';
-import { MapContainer, TileLayer, Marker, useMapEvents } from 'react-leaflet';
-import { useState } from 'react';
+import { MapContainer, TileLayer, Marker, GeoJSON, useMapEvents } from 'react-leaflet';
+import { useEffect, useState } from 'react';
 import 'leaflet/dist/leaflet.css';
-
-// Simple marker icon fix for Leaflet in React
+import * as turf from '@turf/turf';
 import L from 'leaflet';
+
 delete L.Icon.Default.prototype._getIconUrl;
 L.Icon.Default.mergeOptions({
   iconUrl: 'https://unpkg.com/leaflet@1.9.3/dist/images/marker-icon.png',
@@ -23,7 +23,17 @@ function MapClickHandler({ onMapClick }) {
 export default function ValuationPage() {
   const location = useLocation();
   const navigate = useNavigate();
+
   const [markerPos, setMarkerPos] = useState(null);
+  const [parcelGeoJson, setParcelGeoJson] = useState(null);
+  const [parcelData, setParcelData] = useState(null);
+
+  useEffect(() => {
+    fetch("http://localhost:8000/parcels")
+      .then(res => res.json())
+      .then(data => setParcelData(data))
+      .catch(err => console.error("Failed to load parcels", err));
+  }, []);
 
   const data = location.state || {
     estimated_price: 'N/A',
@@ -33,16 +43,29 @@ export default function ValuationPage() {
 
   async function handleMapClick({ lat, lng }) {
     setMarkerPos([lat, lng]);
+    setParcelGeoJson(null);
 
-    try {
-      const res = await fetch(`https://nominatim.openstreetmap.org/reverse?lat=${lat}&lon=${lng}&format=json`);
-      const json = await res.json();
-      const address = json.display_name || 'Reverse geocoding failed';
+    const geocodeRes = await fetch(`https://nominatim.openstreetmap.org/reverse?lat=${lat}&lon=${lng}&format=json`);
+    const geocodeData = await geocodeRes.json();
+    const address = geocodeData.display_name || 'Unknown';
 
-      // Navigate back to same page with new address
+    if (!parcelData) return;
+
+    const clickedPoint = turf.point([lng, lat]);
+    const match = parcelData.features.find(feature =>
+      turf.booleanPointInPolygon(clickedPoint, feature)
+    );
+
+    if (match) {
+      setParcelGeoJson({
+        type: 'FeatureCollection',
+        features: [match]
+      });
+
+      const siteAddr = match.properties?.SITE_ADDR || address;
+      navigate('/valuation', { state: { address: siteAddr } });
+    } else {
       navigate('/valuation', { state: { address } });
-    } catch (err) {
-      console.error('Reverse geocoding error:', err);
     }
   }
 
@@ -61,7 +84,19 @@ export default function ValuationPage() {
             attribution='&copy; <a href="https://www.openstreetmap.org/">OpenStreetMap</a> contributors &copy; <a href="https://carto.com/">CARTO</a>'
           />
           <MapClickHandler onMapClick={handleMapClick} />
-          {markerPos && <Marker position={markerPos} />}
+          {parcelGeoJson ? (
+            <GeoJSON data={parcelGeoJson} style={{ color: '#2563eb', weight: 2 }} />
+          ) : markerPos ? (
+            <Marker
+              position={markerPos}
+              icon={L.divIcon({
+                className: 'custom-marker',
+                html: '<div style="width:14px;height:14px;background:#2563eb;border:2px solid white;border-radius:50%;"></div>',
+                iconSize: [18, 18],
+                iconAnchor: [9, 9],
+              })}
+            />
+          ) : null}
         </MapContainer>
       </div>
 
