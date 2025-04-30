@@ -38,13 +38,13 @@ export default function HomeValuation() {
   const handleSubmit = async (e) => {
     e.preventDefault();
     try {
-      await axios.post('http://localhost:8000/predict', { address });
-      navigate('/valuation');
+      const response = await axios.post('http://localhost:8000/predict', { address });
+      navigate('/valuation', { state: response.data });
     } catch (error) {
       console.error('Prediction error:', error);
     }
   };
-
+  
   return (
     <div className="min-h-screen bg-blue-600 flex flex-col items-center justify-center p-4 relative overflow-hidden">
       {/* Top Navigation */}

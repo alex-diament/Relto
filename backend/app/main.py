@@ -1,15 +1,26 @@
 from fastapi import FastAPI
+from fastapi.middleware.cors import CORSMiddleware
 from pydantic import BaseModel
 
 app = FastAPI()
 
-class PropertyInput(BaseModel):
-    square_feet: float
-    bedrooms: int
-    bathrooms: int
-    zip_code: str
+# Allow frontend at http://localhost:5173 to access backend
+app.add_middleware(
+    CORSMiddleware,
+    allow_origins=["http://localhost:5173"],
+    allow_credentials=True,
+    allow_methods=["*"],
+    allow_headers=["*"],
+)
+
+class AddressInput(BaseModel):
+    address: str
 
 @app.post("/predict")
-def predict_price(data: PropertyInput):
-    # Placeholder response
-    return {"estimated_price": 425000}
+async def predict(data: AddressInput):
+    print("Received address:", data.address)
+    return {
+        "estimated_price": 425000,
+        "confidence": "92%",
+        "address": data.address
+    }
