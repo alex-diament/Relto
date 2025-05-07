@@ -1,10 +1,11 @@
 import { useLocation, useNavigate } from 'react-router-dom';
-import { MapContainer, TileLayer, Marker, GeoJSON, useMapEvents } from 'react-leaflet';
+import { MapContainer, TileLayer, Marker, GeoJSON, useMapEvents, Popup, useMap } from 'react-leaflet';
 import { useEffect, useState } from 'react';
 import 'leaflet/dist/leaflet.css';
 import * as turf from '@turf/turf';
 import L from 'leaflet';
 
+// Fix Leaflet icons
 delete L.Icon.Default.prototype._getIconUrl;
 L.Icon.Default.mergeOptions({
   iconUrl: 'https://unpkg.com/leaflet@1.9.3/dist/images/marker-icon.png',
@@ -23,17 +24,10 @@ function MapClickHandler({ onMapClick }) {
 export default function ValuationPage() {
   const location = useLocation();
   const navigate = useNavigate();
-
   const [markerPos, setMarkerPos] = useState(null);
   const [parcelGeoJson, setParcelGeoJson] = useState(null);
   const [parcelData, setParcelData] = useState(null);
-
-  useEffect(() => {
-    fetch("http://localhost:8000/parcels")
-      .then(res => res.json())
-      .then(data => setParcelData(data))
-      .catch(err => console.error("Failed to load parcels", err));
-  }, []);
+  const [popupContent, setPopupContent] = useState(null);
 
   const data = location.state || {
     estimated_price: 'N/A',
@@ -44,30 +38,45 @@ export default function ValuationPage() {
   async function handleMapClick({ lat, lng }) {
     setMarkerPos([lat, lng]);
     setParcelGeoJson(null);
-
-    const geocodeRes = await fetch(`https://nominatim.openstreetmap.org/reverse?lat=${lat}&lon=${lng}&format=json`);
-    const geocodeData = await geocodeRes.json();
-    const address = geocodeData.display_name || 'Unknown';
-
-    if (!parcelData) return;
-
-    const clickedPoint = turf.point([lng, lat]);
-    const match = parcelData.features.find(feature =>
-      turf.booleanPointInPolygon(clickedPoint, feature)
+    setPopupContent(null);
+  
+    // 1) Geocode
+    const geocodeRes = await fetch(
+      `https://nominatim.openstreetmap.org/reverse?lat=${lat}&lon=${lng}&format=json`
     );
-
+    const { display_name: address = "Unknown" } = await geocodeRes.json();
+  
+    // 2) Fetch bbox-filtered candidates
+    let candidates = [];
+    try {
+      const res = await fetch(
+        `http://localhost:8000/parcel-candidates?lat=${lat}&lng=${lng}`
+      );
+      const fc = await res.json();
+      candidates = fc.features;
+    } catch (err) {
+      console.error("Failed to load candidates", err);
+    }
+  
+    // 3) Use Turf to find the exact containing polygon
+    const clickedPoint = turf.point([lng, lat]);
+    const match = candidates.find(feat =>
+      turf.booleanPointInPolygon(clickedPoint, feat.geometry)
+    );
+  
     if (match) {
-      setParcelGeoJson({
-        type: 'FeatureCollection',
-        features: [match]
+      setParcelGeoJson({ type: "FeatureCollection", features: [match] });
+      setPopupContent({
+        position: [lat, lng],
+        address: match.properties.SITE_ADDR || address,
+        estimated_price: match.properties.ESTIMATED_VALUE || "N/A",
+        confidence: match.properties.CONFIDENCE || "N/A",
       });
-
-      const siteAddr = match.properties?.SITE_ADDR || address;
-      navigate('/valuation', { state: { address: siteAddr } });
     } else {
-      navigate('/valuation', { state: { address } });
+      setPopupContent({ position: [lat, lng], address });
     }
   }
+  
 
   return (
     <div className="flex h-screen w-screen">
@@ -84,6 +93,27 @@ export default function ValuationPage() {
             attribution='&copy; <a href="https://www.openstreetmap.org/">OpenStreetMap</a> contributors &copy; <a href="https://carto.com/">CARTO</a>'
           />
           <MapClickHandler onMapClick={handleMapClick} />
+
+          {/* Show popup if available */}
+          {popupContent && (
+            <Popup position={popupContent.position}>
+              <div className="text-sm">
+                <strong>Address:</strong> {popupContent.address} <br />
+                {popupContent.estimated_price && (
+                  <>
+                    <strong>Estimated Value:</strong> ${popupContent.estimated_price} <br />
+                  </>
+                )}
+                {popupContent.confidence && (
+                  <>
+                    <strong>Confidence:</strong> {popupContent.confidence}
+                  </>
+                )}
+              </div>
+            </Popup>
+          )}
+
+          {/* Draw Parcel */}
           {parcelGeoJson ? (
             <GeoJSON data={parcelGeoJson} style={{ color: '#2563eb', weight: 2 }} />
           ) : markerPos ? (
