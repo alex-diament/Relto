@@ -2,7 +2,8 @@ from fastapi import FastAPI, HTTPException
 from fastapi.middleware.cors import CORSMiddleware
 from fastapi.responses import JSONResponse
 from pydantic import BaseModel
-import os, json
+import re, os, json, requests
+from bs4 import BeautifulSoup
 
 app = FastAPI()
 app.add_middleware(
@@ -27,7 +28,6 @@ with open(DATA_PATH) as f:
     parcels = json.load(f)["features"]
 
 def compute_bbox(geom):
-    # Flatten coords into a list of [lng, lat] pairs
     def _flatten(coords):
         pts = []
         if isinstance(coords[0][0], list):        # MultiPolygon
@@ -44,9 +44,8 @@ def compute_bbox(geom):
     all_pts = _flatten(geom["coordinates"])
     lons = [p[0] for p in all_pts]
     lats = [p[1] for p in all_pts]
-    return (min(lons), min(lats), max(lons), max(lats))  # (minx, miny, maxx, maxy)
+    return (min(lons), min(lats), max(lons), max(lats))
 
-# Build index
 index = []
 for feat in parcels:
     bbox = compute_bbox(feat["geometry"])
@@ -73,14 +72,14 @@ async def predict(data: AddressInput):
 
 @app.get("/parcels")
 def get_parcels():
-    return JSONResponse(content={"type":"FeatureCollection","features":parcels})
+    return JSONResponse(content={"type": "FeatureCollection", "features": parcels})
 
 @app.get("/parcel/{parid}")
 def get_parcel(parid: str):
     for feat in parcels:
         if feat["properties"]["PARID"] == parid:
             return feat
-    raise HTTPException(404, "Parcel not found")
+    raise HTTPException(status_code=404, detail="Parcel not found")
 
 # ——————————————————————————————————————————————
 # NEW: return only bbox-filtered candidates
@@ -97,4 +96,58 @@ def parcel_candidates(lat: float, lng: float):
                 "properties": entry["properties"],
                 "geometry": entry["geometry"],
             })
-    return JSONResponse(content={"type":"FeatureCollection","features":cands})
+    return JSONResponse(content={"type": "FeatureCollection", "features": cands})
+
+# ——————————————————————————————————————————————
+# NEW: scrape PBCPAO for detailed parcel info
+# ——————————————————————————————————————————————
+
+import re
+import requests
+from bs4 import BeautifulSoup
+from fastapi.responses import JSONResponse
+
+from fastapi.responses import JSONResponse
+import requests
+from bs4 import BeautifulSoup
+import re
+
+@app.get("/parcel-details/{parid}")
+def get_parcel_details(parid: str):
+    url = f"https://pbcpao.gov/Property/Details?parcelId={parid}"
+    try:
+        resp = requests.get(url, timeout=10)
+    except requests.RequestException:
+        return JSONResponse(content={})
+    if resp.status_code != 200:
+        return JSONResponse(content={})
+
+    soup = BeautifulSoup(resp.text, "html.parser")
+    details = {}
+
+    page_text = soup.get_text("\n")
+
+    # Location Address (first matching line)
+    m_loc = re.search(r"Location Address\s+([A-Z0-9\-\s]+)", page_text)
+    if m_loc:
+        raw = m_loc.group(1).strip()
+        details["Location Address"] = raw.splitlines()[0]
+
+    # Municipality (first matching line)
+    m_mun = re.search(r"Municipality\s+([A-Z\s]+)", page_text)
+    if m_mun:
+        raw = m_mun.group(1).strip()
+        details["Municipality"] = raw.splitlines()[0]
+
+    # Zoning from structural_elements table
+    table = soup.select_one("table.structural_elements")
+    if table:
+        for tr in table.select("tbody tr"):
+            lbl = tr.find(["td","th"])
+            if lbl and lbl.get_text(strip=True) == "Zoning":
+                val_td = tr.find("td", class_="value")
+                if val_td:
+                    details["Zoning"] = val_td.get_text(strip=True).splitlines()[0]
+                break
+
+    return JSONResponse(content=details)
