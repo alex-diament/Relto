@@ -28,27 +28,30 @@ export default function ValuationPage() {
   const [markerPos, setMarkerPos] = useState(null);
   const [parcelGeoJson, setParcelGeoJson] = useState(null);
   const [valuation, setValuation] = useState({
-    address: initial.address,
-    municipality: '',
-    zoning: '',            // ← initialize zoning
+    address:       initial.address,
+    municipality:  '',
+    zoning:        '',
+    owner:         '',
+    lastSaleDate:  '',
+    lastSalePrice: '',
     estimated_price: initial.estimated_price,
-    confidence: initial.confidence
+    confidence:      initial.confidence
   });
 
   async function handleMapClick({ lat, lng }) {
     setMarkerPos([lat, lng]);
     setParcelGeoJson(null);
 
-    // 1) Reverse‐geocode for a fallback address
-    let rgAddress = 'Unknown';
+    // 1) Reverse‐geocode as fallback
+    let fallbackAddr = 'Unknown';
     try {
       const geo = await fetch(
         `https://nominatim.openstreetmap.org/reverse?lat=${lat}&lon=${lng}&format=json`
       ).then(r => r.json());
-      rgAddress = geo.display_name || rgAddress;
+      fallbackAddr = geo.display_name || fallbackAddr;
     } catch {}
 
-    // 2) Get bbox‐filtered candidates
+    // 2) Fetch bbox‐filtered parcels
     let candidates = [];
     try {
       const fc = await fetch(
@@ -57,7 +60,7 @@ export default function ValuationPage() {
       candidates = fc.features;
     } catch {}
 
-    // 3) Find the matching parcel
+    // 3) Turf point‐in‐polygon
     const pt = turf.point([lng, lat]);
     const match = candidates.find(f => turf.booleanPointInPolygon(pt, f.geometry));
 
@@ -70,38 +73,50 @@ export default function ValuationPage() {
         details = await fetch(
           `http://localhost:8000/parcel-details/${match.properties.PARID}`
         ).then(r => (r.ok ? r.json() : {}));
-      } catch {
-        details = {};
-      }
+      } catch {}
+
       console.log('⚙️ parcel-details', details);
 
-      // 5) Update all fields, including zoning
+      // 5) Update valuation, including last sale
+      const displayAddr =
+        (details['Location Address'] || '').trim() ||
+        fallbackAddr ||
+        match.properties.SITE_ADDR ||
+        initial.address;
+
       setValuation({
-        address:
-          details['Location Address'] ||
-          rgAddress ||
-          match.properties.SITE_ADDR ||
-          initial.address,
-        municipality: details['Municipality'] || '',
-        zoning:       details['Zoning']       || '',        // ← include zoning here
+        address:       displayAddr,
+        municipality:  (details['Municipality']   || '').trim(),
+        zoning:        (details['Zoning']         || '').trim(),
+        owner:         (details['Current Owner']  || '').trim(),
+        lastSaleDate:  details['Last Sale Date']  || '',
+        lastSalePrice: details['Last Sale Price'] || '',
         estimated_price: match.properties.ESTIMATED_VALUE || 'N/A',
-        confidence: match.properties.CONFIDENCE || 'N/A'
+        confidence:      match.properties.CONFIDENCE      || 'N/A'
       });
     } else {
-      // No parcel found—reset everything
+      // reset if no parcel
       setValuation({
-        address: rgAddress,
-        municipality: '',
-        zoning: '',      // ← clear zoning
+        address:       fallbackAddr,
+        municipality:  '',
+        zoning:        '',
+        owner:         '',
+        lastSaleDate:  '',
+        lastSalePrice: '',
         estimated_price: 'N/A',
-        confidence: 'N/A'
+        confidence:      'N/A'
       });
     }
   }
 
+  // dynamic Street-View embed
+  const streetViewUrl = markerPos
+    ? `https://maps.google.com/maps?layer=c&cbll=${markerPos[0]},${markerPos[1]}&cbp=11,0,0,0,0&output=svembed`
+    : null;
+
   return (
     <div className="flex h-screen w-screen">
-      {/* Map */}
+      {/* Map Section */}
       <div className="w-[60%] h-full">
         <MapContainer center={[26.7153, -80.0534]} zoom={14} scrollWheelZoom className="h-full w-full">
           <TileLayer
@@ -109,7 +124,6 @@ export default function ValuationPage() {
             attribution="&copy; OpenStreetMap contributors"
           />
           <MapClickHandler onMapClick={handleMapClick} />
-
           {parcelGeoJson ? (
             <GeoJSON data={parcelGeoJson} style={{ color: '#2563eb', weight: 2 }} />
           ) : markerPos ? (
@@ -126,22 +140,43 @@ export default function ValuationPage() {
         </MapContainer>
       </div>
 
-      {/* Valuation Panel */}
+      {/* Street-View & Valuation Panel */}
       <div className="w-[40%] h-full bg-white p-6 overflow-y-auto">
-        <h2 className="text-2xl font-bold mb-4">Valuation Results</h2>
+        {streetViewUrl && (
+          <div className="mb-4">
+            <iframe
+              src={streetViewUrl}
+              width="100%"
+              height="200"
+              frameBorder="0"
+              style={{ border: 0, borderRadius: '0.5rem' }}
+              allowFullScreen
+              title="Street View"
+            />
+          </div>
+        )}
 
+        <h2 className="text-2xl font-bold mb-4">Valuation Results</h2>
         <div className="text-sm text-gray-600 mb-4">
           <strong>Address:</strong> {valuation.address}
           {valuation.municipality && (
             <>
-              <br />
-              <strong>Municipality:</strong> {valuation.municipality}
+              <br/><strong>Municipality:</strong> {valuation.municipality}
             </>
           )}
           {valuation.zoning && (
             <>
-              <br />
-              <strong>Zoning:</strong> {valuation.zoning}
+              <br/><strong>Zoning:</strong> {valuation.zoning}
+            </>
+          )}
+          {valuation.owner && (
+            <>
+              <br/><strong>Owner:</strong> {valuation.owner}
+            </>
+          )}
+          {valuation.lastSaleDate && (
+            <>
+              <br/><strong>Last True Sale:</strong> {valuation.lastSaleDate} ({valuation.lastSalePrice})
             </>
           )}
         </div>
